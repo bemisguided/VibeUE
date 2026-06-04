@@ -306,8 +306,7 @@ static FToolAutoRegistrar AutoRegister_attach_image(
             }
 
             // Normalize path separators
-            FilePath = FilePath.Replace(TEXT("/"), TEXT("\\"));
-            FilePath = FilePath.Replace(TEXT("\\\\"), TEXT("\\"));
+            FPaths::NormalizeFilename(FilePath);
 
             FString DataUrl, Error;
             if (!InternalChatToolsHelpers::LoadImageAsDataUrl(FilePath, DataUrl, Error))

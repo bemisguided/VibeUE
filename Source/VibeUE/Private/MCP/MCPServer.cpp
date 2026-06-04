@@ -1459,15 +1459,21 @@ void FMCPServer::ExportToolManifest() const
     TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonString);
     FJsonSerializer::Serialize(ToolsArray, Writer);
 
-    // Write to %APPDATA%/VibeUE/tools-manifest.json
-    FString AppData = FPlatformMisc::GetEnvironmentVariable(TEXT("APPDATA"));
-    if (AppData.IsEmpty())
+    // Write to platform app-data dir / VibeUE / tools-manifest.json
+#if PLATFORM_WINDOWS
+    FString AppDataRoot = FPlatformMisc::GetEnvironmentVariable(TEXT("APPDATA"));
+#elif PLATFORM_MAC
+    FString AppDataRoot = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME")) / TEXT("Library/Application Support");
+#else
+    FString AppDataRoot = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME")) / TEXT(".config");
+#endif
+    if (AppDataRoot.IsEmpty())
     {
-        UE_LOG(LogMCPServer, Warning, TEXT("ExportToolManifest: APPDATA env var not set, skipping export"));
+        UE_LOG(LogMCPServer, Warning, TEXT("ExportToolManifest: could not determine app-data directory, skipping export"));
         return;
     }
 
-    FString ManifestDir = AppData / TEXT("VibeUE");
+    FString ManifestDir = AppDataRoot / TEXT("VibeUE");
     FString ManifestPath = ManifestDir / TEXT("tools-manifest.json");
 
     IFileManager::Get().MakeDirectory(*ManifestDir, /*Tree=*/true);

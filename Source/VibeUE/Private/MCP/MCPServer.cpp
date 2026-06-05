@@ -854,20 +854,6 @@ FString FMCPServer::HandleToolsList(TSharedPtr<FJsonObject> Params, const FStrin
 
 FString FMCPServer::HandleToolsCall(TSharedPtr<FJsonObject> Params, const FString& RequestId)
 {
-    // Check VibeUE API key validity before executing any tool
-    if (!bIsVibeUEApiKeyValid)
-    {
-        TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-        TArray<TSharedPtr<FJsonValue>> ContentArray;
-        TSharedPtr<FJsonObject> ContentItem = MakeShared<FJsonObject>();
-        ContentItem->SetStringField(TEXT("type"), TEXT("text"));
-        ContentItem->SetStringField(TEXT("text"), TEXT("\u274C A valid VibeUE API key is required to use VibeUE MCP tools. Get your free API key at https://www.vibeue.com/login"));
-        ContentArray.Add(MakeShared<FJsonValueObject>(ContentItem));
-        Result->SetArrayField(TEXT("content"), ContentArray);
-        Result->SetBoolField(TEXT("isError"), true);
-        return BuildJsonRpcResponse(RequestId, Result);
-    }
-
     if (!Params.IsValid())
     {
         return BuildJsonRpcError(RequestId, -32602, TEXT("Invalid params"));

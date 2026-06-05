@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # ── Detect platform ────────────────────────────────────────────────────────────
 if [[ "$(uname)" == "Darwin" ]]; then

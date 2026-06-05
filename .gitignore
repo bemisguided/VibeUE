@@ -28,6 +28,7 @@ Binaries/
 Build/
 DerivedDataCache/
 Intermediate/
+Packaged/
 Saved/
 Plugins/*/Binaries/
 Plugins/*/Intermediate/

@@ -3666,16 +3666,26 @@ public:
 	);
 
 	/**
-	 * Add a Blueprint Interface to a blueprint.
+	 * Add a Blueprint Interface or native C++ interface to a blueprint.
 	 * Equivalent to: Class Settings → Interfaces → Add in the editor.
 	 *
+	 * Resolution order:
+	 *   1. Blueprint asset path  ("/Game/interface/BPI_Foo")
+	 *   2. Blueprint _C class path (auto-appended)
+	 *   3. Short name scan of loaded Blueprint interface assets ("BPI_Foo")
+	 *   4. Native /Script/ class path ("/Script/MyModule.RpgDialogPresenter") or
+	 *      bare C++ class name ("RpgDialogPresenter") — scans all loaded UClass objects
+	 *      that carry CLASS_Interface.
+	 *
 	 * @param BlueprintPath - Full path to the blueprint
-	 * @param InterfacePath - Interface asset path or short name (e.g., "BPI_TestInterface" or "/Game/interface/BPI_TestInterface")
+	 * @param InterfacePath - Interface identifier: asset path, /Script/ path, or short name
 	 * @return True if the interface was added successfully (or already implemented)
 	 *
 	 * Example:
 	 *   unreal.BlueprintService.add_interface("/Game/BP_Player", "BPI_TestInterface")
 	 *   unreal.BlueprintService.add_interface("/Game/BP_Player", "/Game/interface/BPI_TestInterface")
+	 *   unreal.BlueprintService.add_interface("/Game/BP_Player", "IMyNativeInterface")
+	 *   unreal.BlueprintService.add_interface("/Game/BP_Player", "/Script/MyModule.IMyNativeInterface")
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VibeUE|Blueprints")
 	static bool AddInterface(

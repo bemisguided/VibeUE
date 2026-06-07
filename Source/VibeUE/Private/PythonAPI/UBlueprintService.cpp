@@ -11106,9 +11106,29 @@ bool UBlueprintService::AddInterface(
 		}
 	}
 
+	// Strategy 4: Native C++ interface — try direct object find, then short-name scan of all UClass objects.
+	// Accepts both full /Script/ paths (e.g. "/Script/MyGame.RpgDialogPresenter") and bare class names.
 	if (!InterfaceClass)
 	{
-		UE_LOG(LogTemp, Error, TEXT("AddInterface: Interface '%s' not found. Provide the full asset path (e.g., /Game/interface/BPI_TestInterface)"), *InterfacePath);
+		InterfaceClass = FindObject<UClass>(nullptr, *InterfacePath, true);
+		if (!InterfaceClass)
+		{
+			for (TObjectIterator<UClass> It; It; ++It)
+			{
+				if (It->HasAnyClassFlags(CLASS_Interface) &&
+					It->GetName().Equals(InterfacePath, ESearchCase::IgnoreCase))
+				{
+					InterfaceClass = *It;
+					UE_LOG(LogTemp, Log, TEXT("AddInterface: Resolved native interface '%s' via class scan to '%s'"), *InterfacePath, *It->GetPathName());
+					break;
+				}
+			}
+		}
+	}
+
+	if (!InterfaceClass)
+	{
+		UE_LOG(LogTemp, Error, TEXT("AddInterface: Interface '%s' not found. Accepted formats: Blueprint asset path (/Game/interface/BPI_Foo), native class path (/Script/MyModule.IFoo), or short name (BPI_Foo / IFoo)."), *InterfacePath);
 		return false;
 	}
 

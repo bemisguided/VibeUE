@@ -7733,7 +7733,8 @@ FString UBlueprintService::CreateNodeByKey(
 		return FString();
 	}
 
-	// Parse spawner key - format: "FUNC ClassName::FunctionName", "NODE NodeClassName", or "EVENT ClassName::FunctionName"
+	// Parse spawner key - format: "FUNC ClassName::FunctionName", "NODE NodeClassName", "EVENT ClassName::FunctionName",
+	// "PROPERTY_GET ClassName::PropertyName", or "PROPERTY_SET ClassName::PropertyName"
 	FString KeyType, KeyValue;
 	if (!SpawnerKey.Split(TEXT(" "), &KeyType, &KeyValue))
 	{
@@ -7933,6 +7934,43 @@ FString UBlueprintService::CreateNodeByKey(
 		}
 
 		NewNode = FuncNode;
+	}
+	else if (KeyType.Equals(TEXT("PROPERTY_GET"), ESearchCase::IgnoreCase) || KeyType.Equals(TEXT("PROPERTY_SET"), ESearchCase::IgnoreCase))
+	{
+		FString ClassName, PropertyName;
+		if (!KeyValue.Split(TEXT("::"), &ClassName, &PropertyName))
+		{
+			UE_LOG(LogTemp, Error, TEXT("CreateNodeByKey: Invalid property key format: %s"), *KeyValue);
+			return FString();
+		}
+
+		UClass* OwnerClass = ResolveClassByName(ClassName);
+		if (!OwnerClass)
+		{
+			UE_LOG(LogTemp, Error, TEXT("CreateNodeByKey: Class '%s' not found"), *ClassName);
+			return FString();
+		}
+
+		FProperty* VarProperty = FindFProperty<FProperty>(OwnerClass, *PropertyName);
+		if (!VarProperty)
+		{
+			UE_LOG(LogTemp, Error, TEXT("CreateNodeByKey: Property '%s' not found in class '%s'"), *PropertyName, *ClassName);
+			return FString();
+		}
+
+		const bool bIsSetter = KeyType.Equals(TEXT("PROPERTY_SET"), ESearchCase::IgnoreCase);
+		TSubclassOf<UK2Node_Variable> NodeClass = bIsSetter
+			? UK2Node_VariableSet::StaticClass()
+			: UK2Node_VariableGet::StaticClass();
+
+		UBlueprintVariableNodeSpawner* VarSpawner = UBlueprintVariableNodeSpawner::CreateFromMemberOrParam(NodeClass, VarProperty, nullptr, OwnerClass);
+		if (!VarSpawner)
+		{
+			UE_LOG(LogTemp, Error, TEXT("CreateNodeByKey: Failed to create variable spawner for '%s'"), *KeyValue);
+			return FString();
+		}
+
+		NewNode = VarSpawner->Invoke(Graph, IBlueprintNodeBinder::FBindingSet(), FVector2D(PosX, PosY));
 	}
 	else
 	{

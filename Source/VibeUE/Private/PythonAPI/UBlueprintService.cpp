@@ -66,6 +66,8 @@
 #include "BlueprintEditor.h"
 // For FScopedTransaction (undo support)
 #include "ScopedTransaction.h"
+#include "Engine/InheritableComponentHandler.h"
+#include "Kismet2/ComponentEditorUtils.h"
 
 namespace
 {
@@ -1157,22 +1159,179 @@ bool UBlueprintService::RemoveComponent(
 	return true;
 }
 
-// Helper to find component template in blueprint
-static UActorComponent* FindComponentTemplate(UBlueprint* Blueprint, const FString& ComponentName)
+// Walk the parent blueprint hierarchy looking for a USCS_Node with the given variable name.
+static USCS_Node* FindInheritedSCSNode(UBlueprint* Blueprint, const FName& ComponentName)
 {
-	if (!Blueprint || !Blueprint->SimpleConstructionScript)
+	UClass* ParentClass = Blueprint->ParentClass;
+	while (ParentClass)
+	{
+		UBlueprint* ParentBP = Cast<UBlueprint>(ParentClass->ClassGeneratedBy);
+		if (ParentBP && ParentBP->SimpleConstructionScript)
+		{
+			for (USCS_Node* Node : ParentBP->SimpleConstructionScript->GetAllNodes())
+			{
+				if (Node && Node->GetVariableName() == ComponentName)
+				{
+					return Node;
+				}
+			}
+		}
+		ParentClass = ParentClass->GetSuperClass();
+	}
+	return nullptr;
+}
+
+// Find a component for reading only. Never creates override records.
+// Resolution order:
+//   1. Local SCS node template
+//   2. InheritableComponentHandler override (if one already exists) for a parent SCS node
+//   3. Parent SCS node's own template (unoverridden)
+//   4. Native C++ component sub-object on the Blueprint CDO
+static UActorComponent* FindComponentForRead(UBlueprint* Blueprint, const FString& ComponentName)
+{
+	if (!Blueprint)
 	{
 		return nullptr;
 	}
-	
-	for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+
+	const FName CompFName(*ComponentName);
+
+	// 1. Local SCS
+	if (Blueprint->SimpleConstructionScript)
 	{
-		if (Node && Node->GetVariableName().ToString() == ComponentName)
+		for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
 		{
-			return Node->ComponentTemplate;
+			if (Node && Node->GetVariableName() == CompFName)
+			{
+				return Node->ComponentTemplate;
+			}
 		}
 	}
-	
+
+	// 2 & 3. Parent blueprint SCS
+	if (USCS_Node* InheritedNode = FindInheritedSCSNode(Blueprint, CompFName))
+	{
+		UInheritableComponentHandler* Handler = Blueprint->GetInheritableComponentHandler(false);
+		if (Handler)
+		{
+			FComponentKey Key(InheritedNode);
+			if (UActorComponent* Override = Handler->GetOverridenComponentTemplate(Key))
+			{
+				return Override;
+			}
+		}
+		return InheritedNode->ComponentTemplate;
+	}
+
+	// 4. Native C++ component on the Blueprint CDO
+	if (Blueprint->GeneratedClass)
+	{
+		UObject* CDO = Blueprint->GeneratedClass->GetDefaultObject(false);
+		if (CDO)
+		{
+			TArray<UObject*> SubObjects;
+			GetObjectsWithOuter(CDO, SubObjects, false);
+			for (UObject* SubObj : SubObjects)
+			{
+				UActorComponent* Comp = Cast<UActorComponent>(SubObj);
+				if (Comp && Comp->GetFName() == CompFName
+					&& Comp->CreationMethod == EComponentCreationMethod::Native)
+				{
+					return Comp;
+				}
+			}
+		}
+	}
+
+	return nullptr;
+}
+
+// Find a writable component template, creating an InheritableComponentHandler override record
+// for parent SCS nodes when necessary.
+// For native C++ components, enforces the editor constraint: the property on the owning class
+// must be marked CPF_Edit (EditAnywhere / VisibleAnywhere).
+// Resolution order:
+//   1. Local SCS node template (always writable)
+//   2. InheritableComponentHandler override for a parent SCS node (created if absent)
+//   3. Native C++ component sub-object on the Blueprint CDO (CPF_Edit enforced)
+static UActorComponent* FindOrCreateWritableTemplate(UBlueprint* Blueprint, const FString& ComponentName)
+{
+	if (!Blueprint)
+	{
+		return nullptr;
+	}
+
+	const FName CompFName(*ComponentName);
+
+	// 1. Local SCS
+	if (Blueprint->SimpleConstructionScript)
+	{
+		for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+		{
+			if (Node && Node->GetVariableName() == CompFName)
+			{
+				return Node->ComponentTemplate;
+			}
+		}
+	}
+
+	// 2. Parent blueprint SCS — get or create an InheritableComponentHandler override
+	if (USCS_Node* InheritedNode = FindInheritedSCSNode(Blueprint, CompFName))
+	{
+		FComponentKey Key(InheritedNode);
+		const bool bCanOverride = Key.IsValid()
+			&& Blueprint->ParentClass
+			&& Blueprint->ParentClass->IsChildOf(Key.GetComponentOwner());
+
+		if (!bCanOverride)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FindOrCreateWritableTemplate: Blueprint '%s' cannot override inherited SCS component '%s' (owner class mismatch)"),
+				*Blueprint->GetName(), *ComponentName);
+			return nullptr;
+		}
+
+		UInheritableComponentHandler* Handler = Blueprint->GetInheritableComponentHandler(true);
+		if (!Handler)
+		{
+			return nullptr;
+		}
+
+		UActorComponent* Override = Handler->GetOverridenComponentTemplate(Key);
+		if (!Override)
+		{
+			Override = Handler->CreateOverridenComponentTemplate(Key);
+		}
+		return Override;
+	}
+
+	// 3. Native C++ component on the Blueprint CDO — enforce CPF_Edit constraint
+	if (Blueprint->GeneratedClass)
+	{
+		UObject* CDO = Blueprint->GeneratedClass->GetDefaultObject(false);
+		if (CDO)
+		{
+			TArray<UObject*> SubObjects;
+			GetObjectsWithOuter(CDO, SubObjects, false);
+			for (UObject* SubObj : SubObjects)
+			{
+				UActorComponent* Comp = Cast<UActorComponent>(SubObj);
+				if (Comp && Comp->GetFName() == CompFName
+					&& Comp->CreationMethod == EComponentCreationMethod::Native)
+				{
+					if (FComponentEditorUtils::GetPropertyForEditableNativeComponent(Comp) == nullptr)
+					{
+						UE_LOG(LogTemp, Warning,
+							TEXT("FindOrCreateWritableTemplate: Native component '%s' is not marked EditAnywhere/VisibleAnywhere on its owning class — cannot be modified via API"),
+							*ComponentName);
+						return nullptr;
+					}
+					return Comp;
+				}
+			}
+		}
+	}
+
 	return nullptr;
 }
 
@@ -1189,10 +1348,10 @@ bool UBlueprintService::GetComponentProperty(
 		return false;
 	}
 	
-	UActorComponent* Component = FindComponentTemplate(Blueprint, ComponentName);
+	UActorComponent* Component = FindComponentForRead(Blueprint, ComponentName);
 	if (!Component)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("GetComponentProperty: Component '%s' not found"), *ComponentName);
+		UE_LOG(LogTemp, Warning, TEXT("GetComponentProperty: Component '%s' not found (local, inherited SCS, or native)"), *ComponentName);
 		return false;
 	}
 	
@@ -1224,10 +1383,10 @@ bool UBlueprintService::SetComponentProperty(
 		return false;
 	}
 	
-	UActorComponent* Component = FindComponentTemplate(Blueprint, ComponentName);
+	UActorComponent* Component = FindOrCreateWritableTemplate(Blueprint, ComponentName);
 	if (!Component)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("SetComponentProperty: Component '%s' not found"), *ComponentName);
+		UE_LOG(LogTemp, Warning, TEXT("SetComponentProperty: Component '%s' not found or not writable (inherited native components must be EditAnywhere)"), *ComponentName);
 		return false;
 	}
 	
@@ -1345,10 +1504,10 @@ TArray<FComponentPropertyInfo> UBlueprintService::GetAllComponentProperties(
 		return Results;
 	}
 	
-	UActorComponent* Component = FindComponentTemplate(Blueprint, ComponentName);
+	UActorComponent* Component = FindComponentForRead(Blueprint, ComponentName);
 	if (!Component)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("GetAllComponentProperties: Component '%s' not found"), *ComponentName);
+		UE_LOG(LogTemp, Warning, TEXT("GetAllComponentProperties: Component '%s' not found (local, inherited SCS, or native)"), *ComponentName);
 		return Results;
 	}
 	
@@ -8663,10 +8822,10 @@ bool UBlueprintService::SetCollisionSettings(
 		return false;
 	}
 
-	UActorComponent* Component = FindComponentTemplate(Blueprint, ComponentName);
+	UActorComponent* Component = FindOrCreateWritableTemplate(Blueprint, ComponentName);
 	if (!Component)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("SetCollisionSettings: Component '%s' not found in %s"), *ComponentName, *BlueprintPath);
+		UE_LOG(LogTemp, Warning, TEXT("SetCollisionSettings: Component '%s' not found or not writable in %s (inherited native components must be EditAnywhere)"), *ComponentName, *BlueprintPath);
 		return false;
 	}
 

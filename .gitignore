@@ -13,7 +13,6 @@ vibe_ue.log
 .cursorignore
 /.cursor/
 /.github/
-/CLAUDE.md
 Claude/*
 
 # Local reference / personal notes
